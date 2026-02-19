@@ -26,4 +26,5 @@ dependencies = [
     "groq>=1.0.0",
     "anthropic>=0.76.0",
     "lab>=8.8",
+    "statsmodels>=0.14.6",
 ]

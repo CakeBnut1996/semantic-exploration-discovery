@@ -8,6 +8,25 @@ from typing import List, Any
 from io_utils.load_db import load_embedding_model, get_db_collection, get_or_create_collection
 
 
+def extract_text_and_url_from_html(path: str):
+    if not os.path.exists(path):
+        return "", ""
+
+    with open(path, "r", encoding="utf-8") as f:
+        html = f.read()
+
+    # 1. Extract Original URL from the "saved from" comment
+    url_match = re.search(r'', html)
+    original_url = url_match.group(1) if url_match else "Unknown Source"
+
+    # 2. Extract Text
+    soup = BeautifulSoup(html, "html.parser")
+    for tag in soup(["script", "style", "noscript", "header", "footer", "nav"]):
+        tag.extract()
+
+    text = soup.get_text(separator="\n", strip=True)
+    return text, original_url
+
 # --- Text Processing Functions (Same as before) ---
 
 def extract_text_from_html(path: str) -> str:

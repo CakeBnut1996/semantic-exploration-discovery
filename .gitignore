@@ -5,6 +5,6 @@ PM/
 archive/
 .env
 eval/
-eval_utils/
+eval_utils
 .venv
 .devcontainer

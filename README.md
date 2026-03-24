@@ -23,6 +23,7 @@ semantic-search-engine/
 
 2. Install dependencies
 ```
+pip install uv
 uv sync
 ```
 

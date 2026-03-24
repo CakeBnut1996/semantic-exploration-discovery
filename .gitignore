@@ -8,4 +8,5 @@ eval/
 eval_utils
 .venv
 .devcontainer
-.pem
+wordpress_key.pem
+semantic-search-main.zip

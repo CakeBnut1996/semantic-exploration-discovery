@@ -4,7 +4,7 @@ I develoepd a local semantic search function for a website using a Retrieval-Aug
 It allows users to:
 - Embed text datasets into a vector database (ChromaDB).
 - Query semantically, i.e., ask natural-language questions instead of using keywords.
-- Retrieve and summarize the most relevant dataset using Gemini API.
+- Retrieve and summarize the most relevant dataset using LLM API.
 - While the example data are crawled HTML pages, the approach works with any text corpus (research papers, reports, knowledge bases, etc.).
 
 ## Repository structure
@@ -16,10 +16,6 @@ semantic-search-engine/
 ├── display_utils/ # streamlit display functions
 ├── io_utils/ # read and save files
 ├── app.py # visualization
-│
-├── requirements.txt
-├── README.md
-└── .gitignore
 ```
 
 ## Usage
@@ -27,7 +23,7 @@ semantic-search-engine/
 
 2. Install dependencies
 ```
-pip install -r requirements.txt
+uv sync
 ```
 
 3. Configure your environment

@@ -31,7 +31,7 @@ llm:
     model: "Llama-3.1-8b-Instant" # # https://console.groq.com/docs/model/llama-3.1-8b-instant # used for paper
   groq_llama2:
     provider: "groq"
-    model: "meta-llama/llama-4-maverick-17b-128e-instruct" # https://console.groq.com/docs/rate-limits # used for application
+    model: "meta-llama/meta-llama/llama-4-scout-17b-16e-instruct" # https://console.groq.com/docs/rate-limits # used for application
   anthropics:
     provider: "anthropic"
     model: "claude-3-haiku-20240307" # https://platform.claude.com/docs/en/about-claude/pricing

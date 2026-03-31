@@ -1,5 +1,6 @@
 import streamlit as st
 import yaml
+from pathlib import Path
 from typing import cast
 
 # --- Standard Imports (No Reloading) ---
@@ -19,6 +20,8 @@ st.set_page_config(page_title="Semantic Search Demo", layout="wide")
 apply_custom_css()
 render_header()
 
+BASE_DIR = Path(__file__).resolve().parent
+
 
 # --- Load Logic & Config ---
 @st.cache_resource
@@ -27,7 +30,9 @@ def load_system():
     Loads config, resolves active models/DBs, and initializes the Student.
     Cached so it doesn't re-run on every UI interaction.
     """
-    with open("config.yaml", "r") as f:
+    config_path = BASE_DIR / "config.yaml"
+
+    with config_path.open("r", encoding="utf-8") as f:
         cfg = yaml.safe_load(f)
 
     # 1. Resolve Active Settings based on your new structure
@@ -37,7 +42,7 @@ def load_system():
 
     # 2. Set Operational Variables
     system_config = {
-        "DB_PATH": cfg['data']['db_path'],
+        "DB_PATH": str((BASE_DIR / cfg['data']['db_path']).resolve()),
         "COLLECTION_NAME": active_db['collection'],
         "EMBEDDING_MODEL": active_emb['model'],
         "NUM_DOCS": cfg['retrieval']['num_docs'],

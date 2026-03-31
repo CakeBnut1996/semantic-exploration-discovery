@@ -8,6 +8,8 @@ eval/
 eval_utils
 .venv
 .devcontainer
+.idea
+.vscode
 wordpress_key.pem
 semantic-search-main.zip
 user_testing/

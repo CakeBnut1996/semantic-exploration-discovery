@@ -1,8 +1,7 @@
 # --- GLOBAL SETTINGS ---
 data:
-  data_to_db: "C:/Users/mmh/Documents/data_science_kdf/data_raw/data"
-  db_path: "C:/Users/mmh/Documents/data_science_kdf/chroma_db"
-  gold_json_path: "C:/Users/mmh/Documents/data_science_kdf/eval/eval_data/all_data.json"
+  data_to_db: "data_raw/wildlife"
+  db_path: "chroma_db"
   chunk_size: 256
   chunk_overlap: 40
 
@@ -14,7 +13,6 @@ retrieval:
 
 generation:
   active_student: "groq_llama2"
-  active_judge: "gemini_pro"
 
 llm:
   gemini_pro:

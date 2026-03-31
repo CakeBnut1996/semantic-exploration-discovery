@@ -10,7 +10,6 @@ dependencies = [
     "matplotlib~=3.10.8",
     "nltk~=3.9.2",
     "numpy~=2.3.4",
-    "openai~=2.4.0",
     "pandas~=2.3.3",
     "protobuf~=6.33.0",
     "pydantic~=2.12.2",
@@ -21,10 +20,8 @@ dependencies = [
     "sentence-transformers~=5.1.1",
     "streamlit~=1.51.0",
     "tiktoken~=0.12.0",
-    "google-genai",
     "jupyter>=1.1.1",
     "groq>=1.0.0",
-    "anthropic>=0.76.0",
     "lab>=8.8",
     "statsmodels>=0.14.6",
 ]

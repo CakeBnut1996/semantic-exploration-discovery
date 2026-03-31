@@ -1,11 +1,12 @@
 import os
+from pathlib import Path
 import re
 import hashlib
 import tiktoken
 from bs4 import BeautifulSoup
 from nltk.tokenize import sent_tokenize
 from typing import List, Any
-from io_utils.load_db import load_embedding_model, get_db_collection, get_or_create_collection
+from io_utils.load_db import load_embedding_model, get_or_create_collection
 
 
 def extract_text_and_url_from_html(path: str):
@@ -131,16 +132,21 @@ def run_ingestion(
     """
 
     # 1. Initialize Resources
+    root_path = Path.cwd().parent
+    db_path = os.path.join(root_path, db_path)
     collection = get_or_create_collection(db_path, collection_name)
     model = load_embedding_model(embedding_model_name)
 
     # 2. Find Files
+    
+    data_dir = os.path.join(root_path, data_dir)
+
     if not os.path.exists(data_dir):
         print(f"❌ Error: Data directory '{data_dir}' not found.")
         return
 
     files = [f for f in os.listdir(data_dir) if f.endswith(".html")]
-    print(f"\n🚀 Found {len(files)} HTML files. Starting ingestion...\n")
+    print(f"\n🚀 Found {len(files)} HTML files. Starting ingestion from {data_dir}...\n")
 
     # 3. Process Loop
     for filename in files:

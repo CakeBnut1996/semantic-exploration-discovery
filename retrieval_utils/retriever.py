@@ -1,7 +1,7 @@
 from io_utils.load_db import load_embedding_model, get_db_collection, get_or_create_collection
 from collections import defaultdict
 from pydantic import BaseModel
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 
 # --- Internal Cache to prevent reloading model every time ---
 _global_cache = {
@@ -25,6 +25,8 @@ class RetrievalResult(BaseModel):
 class RankedDataset(BaseModel):
     dataset_id: str
     top_score: float
+    source_url: Optional[str] = None
+    source_title: Optional[str] = None
     top_chunks: List[Dict[str, Any]]
 
 
@@ -88,7 +90,7 @@ def retrieve_data(
     if initial_results["metadatas"] and initial_results["metadatas"][0]:
         for meta in initial_results["metadatas"][0]:
             # Support 'dataset' or 'source' key
-            ds_id = meta["dataset"]
+            ds_id = meta.get("dataset") if meta else None
             if ds_id and ds_id not in unique_datasets:
                 unique_datasets.append(ds_id)
             if len(unique_datasets) == num_docs:
@@ -130,11 +132,19 @@ def rank_datasets(results: List[RetrievalResult]) -> List[RankedDataset]:
         return []
 
     dataset_groups = defaultdict(list)
+    dataset_meta = {}
     for res in results:
         dataset_groups[res.dataset_id].append({
             "score": res.score,
-            "text": res.chunk_text
+            "text": res.chunk_text,
+            "source_url": (res.metadata or {}).get("source_url"),
+            "source_title": (res.metadata or {}).get("source_title")
         })
+        if res.dataset_id not in dataset_meta:
+            dataset_meta[res.dataset_id] = {
+                "source_url": (res.metadata or {}).get("source_url"),
+                "source_title": (res.metadata or {}).get("source_title")
+            }
 
     rankings = []
     for ds_id, chunks in dataset_groups.items():
@@ -143,6 +153,8 @@ def rank_datasets(results: List[RetrievalResult]) -> List[RankedDataset]:
         rankings.append(RankedDataset(
             dataset_id=ds_id,
             top_score=top_score,
+            source_url=dataset_meta.get(ds_id, {}).get("source_url"),
+            source_title=dataset_meta.get(ds_id, {}).get("source_title"),
             top_chunks=chunks
         ))
 

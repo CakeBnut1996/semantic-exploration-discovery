@@ -1,6 +1,6 @@
 # --- GLOBAL SETTINGS ---
 data:
-  data_to_db: "data_raw/wildlife"
+  data_to_db: "data_raw"
   db_path: "chroma_db"
   chunk_size: 256
   chunk_overlap: 40

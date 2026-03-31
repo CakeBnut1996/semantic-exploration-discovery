@@ -2,31 +2,70 @@ import os
 from pathlib import Path
 import re
 import hashlib
+from urllib.parse import urlparse
 import tiktoken
 from bs4 import BeautifulSoup
 from nltk.tokenize import sent_tokenize
-from typing import List, Any
+from typing import List, Any, Tuple
 from io_utils.load_db import load_embedding_model, get_or_create_collection
 
 
-def extract_text_and_url_from_html(path: str):
+def _normalize_url(url: str) -> str:
+    if not url:
+        return ""
+    parsed = urlparse(url.strip())
+    if parsed.scheme in {"http", "https"} and parsed.netloc:
+        return url.strip()
+    return ""
+
+
+def _extract_original_url(html: str, soup: BeautifulSoup) -> str:
+    # Browser-saved pages can include this marker comment.
+    saved_from_match = re.search(r"saved from url=\(\d+\)(https?://[^\s\"'>]+)", html, re.IGNORECASE)
+    if saved_from_match:
+        candidate = _normalize_url(saved_from_match.group(1))
+        if candidate:
+            return candidate
+
+    canonical = soup.find("link", rel=lambda v: v and "canonical" in " ".join(v).lower() if isinstance(v, list) else "canonical" in str(v).lower())
+    if canonical and canonical.get("href"):
+        candidate = _normalize_url(canonical.get("href", ""))
+        if candidate:
+            return candidate
+
+    for attrs in (
+        {"property": "og:url"},
+        {"name": "og:url"},
+        {"property": "twitter:url"},
+        {"name": "twitter:url"},
+    ):
+        tag = soup.find("meta", attrs=attrs)
+        if tag and tag.get("content"):
+            candidate = _normalize_url(tag.get("content", ""))
+            if candidate:
+                return candidate
+
+    return "Unknown Source"
+
+
+def extract_text_and_url_from_html(path: str) -> Tuple[str, str, str]:
     if not os.path.exists(path):
-        return "", ""
+        return "", "Unknown Source", "Untitled"
 
     with open(path, "r", encoding="utf-8") as f:
         html = f.read()
 
-    # 1. Extract Original URL from the "saved from" comment
-    url_match = re.search(r'', html)
-    original_url = url_match.group(1) if url_match else "Unknown Source"
-
-    # 2. Extract Text
+    # 1. Parse and extract URL/title metadata.
     soup = BeautifulSoup(html, "html.parser")
+    original_url = _extract_original_url(html, soup)
+    source_title = soup.title.get_text(strip=True) if soup.title else Path(path).stem
+
+    # 2. Extract visible text.
     for tag in soup(["script", "style", "noscript", "header", "footer", "nav"]):
         tag.extract()
 
     text = soup.get_text(separator="\n", strip=True)
-    return text, original_url
+    return text, original_url, source_title
 
 # --- Text Processing Functions (Same as before) ---
 
@@ -97,7 +136,15 @@ def chunk_text(text: str, tokenizer_name: str = "cl100k_base", max_tokens: int =
 
 # --- Database Interaction ---
 
-def embed_and_upsert(chunks: List[str], collection: Any, embedding_model: Any, model_name: str, source_filename: str):
+def embed_and_upsert(
+    chunks: List[str],
+    collection: Any,
+    embedding_model: Any,
+    model_name: str,
+    source_filename: str,
+    source_url: str,
+    source_title: str
+):
     if not chunks: return
 
     # Prefix handling for E5 models
@@ -107,7 +154,14 @@ def embed_and_upsert(chunks: List[str], collection: Any, embedding_model: Any, m
     embeddings = embedding_model.encode(texts_to_embed, convert_to_numpy=True)
 
     ids = [f"{source_filename}_{i}" for i in range(len(chunks))]
-    metadatas = [{"dataset": source_filename}] * len(chunks)
+    metadatas = [
+        {
+            "dataset": source_filename,
+            "source_url": source_url,
+            "source_title": source_title
+        }
+        for _ in chunks
+    ]
 
     collection.add(ids=ids, embeddings=embeddings, documents=chunks, metadatas=metadatas)
     print(f"   ✅ Saved {len(chunks)} chunks.")
@@ -145,18 +199,21 @@ def run_ingestion(
         print(f"❌ Error: Data directory '{data_dir}' not found.")
         return
 
-    files = [f for f in os.listdir(data_dir) if f.endswith(".html")]
+    data_dir_path = Path(data_dir)
+    files = sorted(data_dir_path.rglob("*.html"))
     print(f"\n🚀 Found {len(files)} HTML files. Starting ingestion from {data_dir}...\n")
 
     # 3. Process Loop
-    for filename in files:
-        file_path = os.path.join(data_dir, filename)
-        base_name = os.path.splitext(filename)[0]  # e.g. "report_q3"
+    for file_path in files:
+        file_path = str(file_path)
+        relative_path = Path(file_path).relative_to(data_dir_path)
+        base_name = str(relative_path.with_suffix("")).replace("\\", "/")
+        filename = relative_path.name
 
         print(f"📄 Processing: {filename}")
 
         # Pipeline: Extract -> Clean -> Filter -> Chunk
-        raw_text = extract_text_from_html(file_path)
+        raw_text, original_url, source_title = extract_text_and_url_from_html(file_path)
         clean_txt = clean_text(raw_text)
         filtered_txt = filter_noise(clean_txt)
 
@@ -173,7 +230,9 @@ def run_ingestion(
             collection=collection,
             embedding_model=model,
             model_name=embedding_model_name,
-            source_filename=base_name
+            source_filename=base_name,
+            source_url=original_url,
+            source_title=source_title
         )
 
     count = collection.count()

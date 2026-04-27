@@ -20,6 +20,9 @@ The system uses an approach called **Retrieval-Augmented Generation (RAG)**, whi
 2. **Generating an answer (Generation)**
    Once the most relevant documents are found, they are passed to a **Large Language Model (LLM)** — an AI system (like GPT or Gemini) that reads the retrieved content and writes a clear, concise answer in plain language. The LLM only uses the retrieved documents to answer, so responses are grounded in your actual data.
 
+3. **Evaluation**
+    We developed an evaluation framework for RAG systems that measures both retrieval accuracy (embedding models) and generation quality (large language models). For details, see my other repository: http://github.com/CakeBnut1996/rag-evaluator 
+
 The result is three things: a plain-language **AI summary**, the **source document** the answer came from, and the **exact quote** within that document.
 
 ![Illustration](./images/illustration_annotated.png)

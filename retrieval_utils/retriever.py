@@ -1,5 +1,4 @@
-from ingestion_utils.load_db import load_embedding_model, get_db_collection, get_or_create_collection
-from collections import defaultdict
+from ingestion_utils.load_db import load_embedding_model, get_db_collection
 from pydantic import BaseModel
 from typing import List, Dict, Any, Optional
 
@@ -16,7 +15,7 @@ _global_cache = {
 
 class RetrievalResult(BaseModel):
     score: float
-    rank: float
+    rank: int
     chunk_text: str
     dataset_id: str
     metadata: Dict[str, Any]
@@ -32,14 +31,24 @@ class RankedDataset(BaseModel):
 
 # --- Helper Function ---
 
-def _preprocess_query(query: str, model_name: str) -> str:
-    """Handles model-specific prefixes."""
+def _format_query_for_model(query: str, model_name: str) -> str:
+    """Add only the prefix required by the selected embedding model."""
     model_lower = model_name.lower()
     if "e5" in model_lower:
         return f"query: {query}"
     if "bge" in model_lower and "en-v1.5" in model_lower:
         return f"Represent this sentence for searching relevant passages: {query}"
     return query
+
+
+def _distance_to_relevance(distance: float, distance_space: str) -> float:
+    """Convert a Chroma distance to a bounded, display-safe relevance score."""
+    distance = max(float(distance), 0.0)
+    if distance_space == "cosine":
+        return max(0.0, min(1.0, 1.0 - distance))
+    # Chroma defaults to squared L2 distance. Reciprocal distance is monotonic
+    # and, unlike ``1 - distance``, cannot become negative.
+    return 1.0 / (1.0 + distance)
 
 
 # --- Core Functions ---
@@ -49,13 +58,9 @@ def retrieve_data(
         db_path: str,
         collection_name: str,
         model_name: str,
-        num_docs: int = 5,
-        chunks_per_doc: int = 3
+        num_docs: int = 5
 ) -> List[RetrievalResult]:
-    """
-    Retrieves data based on string parameters.
-    Automatically handles loading (and caching) the DB and Model.
-    """
+    """Return the single best-matching chunk from each selected document."""
     if not query.strip():
         return []
 
@@ -76,87 +81,70 @@ def retrieve_data(
     collection = _global_cache["collection"]
 
     # 2. Encode Query
-    formatted_query = _preprocess_query(query, model_name)
+    formatted_query = _format_query_for_model(query, model_name)
     query_emb = encoder.encode([formatted_query], convert_to_numpy=True)
 
-    # 3. Broad Search (Find unique sources)
-    initial_results = collection.query(
+    # Query the complete collection once, then apply stable local sorting. This
+    # removes dependence on approximate-index return order and on a second set
+    # of per-document searches.
+    collection_size = collection.count()
+    if collection_size == 0:
+        return []
+
+    raw_results = collection.query(
         query_embeddings=query_emb,
-        n_results=num_docs * chunks_per_doc * 2,
-        include=["documents", "metadatas", "embeddings", "distances"]
+        n_results=collection_size,
+        include=["documents", "metadatas", "distances"]
     )
 
-    unique_datasets = []
-    if initial_results["metadatas"] and initial_results["metadatas"][0]:
-        for meta in initial_results["metadatas"][0]:
-            # Support 'dataset' or 'source' key
-            ds_id = meta.get("dataset") if meta else None
-            if ds_id and ds_id not in unique_datasets:
-                unique_datasets.append(ds_id)
-            if len(unique_datasets) == num_docs:
-                break
+    ids = (raw_results.get("ids") or [[]])[0]
+    documents = (raw_results.get("documents") or [[]])[0]
+    metadatas = (raw_results.get("metadatas") or [[]])[0]
+    distances = (raw_results.get("distances") or [[]])[0]
+    candidates = []
+    for item_id, document, metadata, distance in zip(ids, documents, metadatas, distances):
+        metadata = metadata or {}
+        dataset_id = metadata.get("dataset") or metadata.get("source")
+        if dataset_id and document:
+            candidates.append((float(distance), str(dataset_id), str(item_id), document, metadata))
+    candidates.sort(key=lambda item: (item[0], item[1], item[2]))
 
-    # 4. Targeted Search (Fetch chunks per specific source)
-    parsed_results = []
-    global_rank = 1
-    for ds_id in unique_datasets:
-        doc_results = collection.query(
-            query_embeddings=query_emb,
-            n_results=chunks_per_doc,
-            where={"dataset": ds_id},
-            include=["documents", "metadatas", "distances"]
-        )
+    distance_space = str((getattr(collection, "metadata", None) or {}).get("hnsw:space", "l2")).lower()
+    parsed_results: List[RetrievalResult] = []
+    seen_datasets = set()
+    for distance, dataset_id, _, document, metadata in candidates:
+        if dataset_id in seen_datasets:
+            continue
+        seen_datasets.add(dataset_id)
+        parsed_results.append(RetrievalResult(
+            score=_distance_to_relevance(distance, distance_space),
+            rank=len(parsed_results) + 1,
+            chunk_text=document,
+            dataset_id=dataset_id,
+            metadata=metadata,
+        ))
+        if len(parsed_results) >= num_docs:
+            break
 
-        if doc_results["ids"] and doc_results["ids"][0]:
-            count = len(doc_results["ids"][0])
-            for i in range(count):
-                dist = doc_results["distances"][0][i]
-                sim_score = 1.0 - dist
-
-                parsed_results.append(RetrievalResult(
-                    score=sim_score,
-                    rank=global_rank,
-                    chunk_text=doc_results["documents"][0][i],
-                    dataset_id=ds_id,
-                    metadata=doc_results["metadatas"][0][i]
-                ))
-                global_rank += 1
     return parsed_results
 
 
 def rank_datasets(results: List[RetrievalResult]) -> List[RankedDataset]:
-    """
-    Sorts the retrieved results by dataset.
-    """
-    if not results:
-        return []
-
-    dataset_groups = defaultdict(list)
-    dataset_meta = {}
-    for res in results:
-        dataset_groups[res.dataset_id].append({
-            "score": res.score,
-            "text": res.chunk_text,
-            "source_url": (res.metadata or {}).get("source_url"),
-            "source_title": (res.metadata or {}).get("source_title")
-        })
-        if res.dataset_id not in dataset_meta:
-            dataset_meta[res.dataset_id] = {
-                "source_url": (res.metadata or {}).get("source_url"),
-                "source_title": (res.metadata or {}).get("source_title")
-            }
-
-    rankings = []
-    for ds_id, chunks in dataset_groups.items():
-        chunks.sort(key=lambda x: x["score"], reverse=True)
-        top_score = chunks[0]["score"]
-        rankings.append(RankedDataset(
-            dataset_id=ds_id,
-            top_score=top_score,
-            source_url=dataset_meta.get(ds_id, {}).get("source_url"),
-            source_title=dataset_meta.get(ds_id, {}).get("source_title"),
-            top_chunks=chunks
-        ))
-
-    rankings.sort(key=lambda x: x.top_score, reverse=True)
+    """Convert one-chunk retrieval results to document-level results."""
+    rankings = [
+        RankedDataset(
+            dataset_id=result.dataset_id,
+            top_score=result.score,
+            source_url=result.metadata.get("source_url"),
+            source_title=result.metadata.get("source_title"),
+            top_chunks=[{
+                "score": result.score,
+                "text": result.chunk_text,
+                "source_url": result.metadata.get("source_url"),
+                "source_title": result.metadata.get("source_title"),
+            }],
+        )
+        for result in results
+    ]
+    rankings.sort(key=lambda x: (-x.top_score, x.dataset_id))
     return rankings

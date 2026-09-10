@@ -7,7 +7,6 @@ data:
 
 retrieval:
   num_docs: 5 # number of documents to retrieve
-  chunks_per_doc: 2 # number of chunks to retrieve per document
   active_db: "demo" 
   active_embedding: "mini_lm"
 
@@ -18,24 +17,10 @@ llm:
   groq_gpt_oss:
     provider: "groq"
     model: "openai/gpt-oss-120b" # Free tier on Groq
-  groq_qwen:
-    provider: "groq"
-    model: "qwen/qwen3.8-27b" # Free tier on Groq
-  gemini_flash:
-    provider: "gemini"
-    model: "gemini-2.5-flash" # Free tier on Google Gemini
 
 embeddings:
   mini_lm:
     model: "sentence-transformers/all-MiniLM-L6-v2"
-  gte:
-    model: "thenlper/gte-small"
-  bge:
-    model: "BAAI/bge-small-en-v1.5"
-  e5:
-    model: "intfloat/e5-small-v2"
-  snowflake:
-    model: "Snowflake/snowflake-arctic-embed-xs"
 
 db:
   demo:

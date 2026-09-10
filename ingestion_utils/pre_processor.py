@@ -1,7 +1,6 @@
 import os
 from pathlib import Path
 import re
-import hashlib
 from urllib.parse import urlparse
 import tiktoken
 from bs4 import BeautifulSoup
@@ -45,93 +44,94 @@ def _extract_original_url(html: str, soup: BeautifulSoup) -> str:
             if candidate:
                 return candidate
 
-    return "Unknown Source"
+    # Local test files often have no deployable public URL. Store an empty value
+    # instead of a fake/broken link; deployment can populate this metadata later.
+    return ""
+
+
+SKIP_LINK_TEXT = re.compile(
+    r"skip\s+to\s+(?:main\s+)?content|skip\s+navigation|jump\s+to\s+content",
+    re.IGNORECASE,
+)
+
+
+def _clean_soup(soup: BeautifulSoup) -> str:
+    """Minimal cleanup for locally downloaded HTML test pages."""
+    for tag in soup(["head", "script", "style", "noscript", "header", "footer", "nav"]):
+        tag.decompose()
+
+    for control in soup.find_all(["a", "button"]):
+        if SKIP_LINK_TEXT.search(control.get_text(" ", strip=True)):
+            control.decompose()
+
+    return " ".join(soup.stripped_strings)
 
 
 def extract_text_and_url_from_html(path: str) -> Tuple[str, str, str]:
     if not os.path.exists(path):
-        return "", "Unknown Source", "Untitled"
+        return "", "", "Untitled"
 
     with open(path, "r", encoding="utf-8") as f:
         html = f.read()
 
-    # 1. Parse and extract URL/title metadata.
     soup = BeautifulSoup(html, "html.parser")
     original_url = _extract_original_url(html, soup)
     source_title = soup.title.get_text(strip=True) if soup.title else Path(path).stem
-
-    # 2. Extract visible text.
-    for tag in soup(["script", "style", "noscript", "header", "footer", "nav"]):
-        tag.extract()
-
-    text = soup.get_text(separator="\n", strip=True)
-    return text, original_url, source_title
-
-# --- Text Processing Functions (Same as before) ---
+    return _clean_soup(soup), original_url, source_title
 
 def extract_text_from_html(path: str) -> str:
-    if not os.path.exists(path):
-        return ""
-    with open(path, "r", encoding="utf-8") as f:
-        html = f.read()
-    soup = BeautifulSoup(html, "html.parser")
-    for tag in soup(["script", "style", "noscript", "header", "footer", "nav"]):
-        tag.extract()
-    return soup.get_text(separator="\n", strip=True)
-
-
-def clean_text(text: str) -> str:
-    text = re.sub(r'\n{2,}', '\n', text)
-    text = re.sub(r'[ \t]+', ' ', text)
-    text = re.sub(r'\f', '', text)
-    return text.strip()
-
-
-def filter_noise(text: str) -> str:
-    lines = text.split("\n")
-    clean_lines = []
-    for ln in lines:
-        s = ln.strip()
-        if not s: continue
-        if re.match(r'^\d+[\.\)]', s): continue
-        if len(s) < 30 and s.isupper(): continue
-        if "REFERENCES" in s.upper() or "TABLE" in s.upper(): continue
-        clean_lines.append(ln)
-    return "\n".join(clean_lines)
-
-
-def _deduplicate_chunks(chunks: List[str]) -> List[str]:
-    seen = set()
-    unique = []
-    for c in chunks:
-        h = hashlib.md5(c.encode("utf-8")).hexdigest()
-        if h not in seen:
-            seen.add(h)
-            unique.append(c)
-    return unique
+    return extract_text_and_url_from_html(path)[0]
 
 
 def chunk_text(text: str, tokenizer_name: str = "cl100k_base", max_tokens: int = 256, overlap: int = 40) -> List[str]:
+    """Chunk on sentence boundaries only.
+
+    A single sentence can exceed ``max_tokens``. In that case it is emitted as
+    one oversized chunk rather than truncated, split mid-sentence, or silently
+    discarded. ``overlap`` is also composed exclusively of whole sentences.
+    """
+    if max_tokens <= 0:
+        raise ValueError("max_tokens must be greater than zero")
+    if overlap < 0:
+        raise ValueError("overlap cannot be negative")
+
     enc = tiktoken.get_encoding(tokenizer_name)
-    sentences = sent_tokenize(text)
-    chunks = []
-    current = []
-    current_tokens = 0
+    sentences = [s.strip() for s in sent_tokenize(text) if s.strip()]
+    chunks: List[str] = []
+    current: List[str] = []
+
+    def token_count(parts: List[str]) -> int:
+        return len(enc.encode(" ".join(parts)))
+
+    def flush_current() -> None:
+        nonlocal current
+        if current:
+            chunks.append(" ".join(current))
+            current = []
 
     for sent in sentences:
-        sent_len = len(enc.encode(sent))
-        if sent_len > max_tokens: continue
-        if current_tokens + sent_len > max_tokens:
-            full_chunk = " ".join(current)
-            chunks.append(full_chunk)
-            overlap_txt = full_chunk[-overlap:] if len(full_chunk) > overlap else full_chunk
-            current = [overlap_txt]
-            current_tokens = len(enc.encode(overlap_txt))
-        current.append(sent)
-        current_tokens += sent_len
+        sent_tokens = len(enc.encode(sent))
+        if sent_tokens > max_tokens:
+            flush_current()
+            chunks.append(sent)
+            continue
 
-    if current: chunks.append(" ".join(current))
-    return _deduplicate_chunks(chunks)
+        candidate_tokens = token_count([*current, sent])
+        if candidate_tokens > max_tokens and current:
+            chunks.append(" ".join(current))
+            overlap_sents: List[str] = []
+            for s in reversed(current):
+                proposed = [s, *overlap_sents]
+                if token_count(proposed) <= overlap:
+                    overlap_sents.insert(0, s)
+                else:
+                    break
+            current = overlap_sents + [sent]
+        else:
+            current.append(sent)
+
+    flush_current()
+    return chunks
 
 
 # --- Database Interaction ---
@@ -163,7 +163,10 @@ def embed_and_upsert(
         for _ in chunks
     ]
 
-    collection.add(ids=ids, embeddings=embeddings, documents=chunks, metadatas=metadatas)
+    # Replace the source as one unit so re-ingestion cannot leave stale chunks
+    # behind when cleanup changes reduce the number of chunks.
+    collection.delete(where={"dataset": source_filename})
+    collection.upsert(ids=ids, embeddings=embeddings, documents=chunks, metadatas=metadatas)
     print(f"   ✅ Saved {len(chunks)} chunks.")
 
 
@@ -211,13 +214,10 @@ def run_ingestion(
 
         print(f"📄 Processing: {filename}")
 
-        # Pipeline: Extract -> Clean -> Filter -> Chunk
+        # Local HTML is minimally cleaned during extraction, then chunked once.
         raw_text, original_url, source_title = extract_text_and_url_from_html(file_path)
-        clean_txt = clean_text(raw_text)
-        filtered_txt = filter_noise(clean_txt)
-
         chunks = chunk_text(
-            filtered_txt,
+            raw_text,
             tokenizer_name=tokenizer_model,
             max_tokens=chunk_size,
             overlap=chunk_overlap

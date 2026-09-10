@@ -10,6 +10,7 @@ eval_utils
 .devcontainer
 .idea
 .vscode
+.generation_cache/
 wordpress_key.pem
 semantic-search-main.zip
 user_testing/

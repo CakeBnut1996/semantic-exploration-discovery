@@ -5,15 +5,15 @@ from typing import cast
 
 # --- Standard Imports (No Reloading) ---
 from retrieval_utils.retriever import retrieve_data, rank_datasets
-from generation_utils.generator import StudentGenerator
-from generation_utils.schema import Response
-from display_utils.ui_components import (
-    apply_custom_css,
-    render_header,
-    render_search_bar,
-    render_answer_section,
-    render_supporting_evidence
+from generation_utils.generator import (
+    StudentGenerator,
+    ground_response,
+    select_ranked_context,
+    serialize_ranked_context,
 )
+from generation_utils.schema import Response
+from main import format_markdown_response
+from display_utils.ui_components import apply_custom_css, render_header, render_search_bar
 
 # --- Page Configuration ---
 st.set_page_config(page_title="Semantic Search Demo", layout="wide")
@@ -45,8 +45,7 @@ def load_system():
         "DB_PATH": str((BASE_DIR / cfg['data']['db_path']).resolve()),
         "COLLECTION_NAME": active_db['collection'],
         "EMBEDDING_MODEL": active_emb['model'],
-        "NUM_DOCS": cfg['retrieval']['num_docs'],
-        "CHUNKS_PER_DOC": cfg['retrieval']['chunks_per_doc']
+        "NUM_DOCS": cfg['retrieval']['num_docs']
     }
 
     # 3. Initialize Student Generator
@@ -73,8 +72,7 @@ if search_btn and query_text:
                 db_path=sys_cfg["DB_PATH"],
                 collection_name=sys_cfg["COLLECTION_NAME"],
                 model_name=sys_cfg["EMBEDDING_MODEL"],
-                num_docs=sys_cfg["NUM_DOCS"],
-                chunks_per_doc=sys_cfg["CHUNKS_PER_DOC"]
+                num_docs=sys_cfg["NUM_DOCS"]
             )
 
             dataset_meta_map = {}
@@ -82,7 +80,8 @@ if search_btn and query_text:
                 if item.dataset_id not in dataset_meta_map:
                     dataset_meta_map[item.dataset_id] = {
                         "source_url": (item.metadata or {}).get("source_url"),
-                        "source_title": (item.metadata or {}).get("source_title")
+                        "source_title": (item.metadata or {}).get("source_title"),
+                        "relevance_score": item.score
                     }
             title_to_dataset_id = {
                 meta["source_title"]: dataset_id
@@ -91,11 +90,13 @@ if search_btn and query_text:
             }
 
             # B. Ranking
-            ranked_data = rank_datasets(retrieved_data)
+            ranked_data = select_ranked_context(query_text, rank_datasets(retrieved_data))
+            for rds in ranked_data:
+                if rds.dataset_id in dataset_meta_map:
+                    dataset_meta_map[rds.dataset_id]["relevance_score"] = rds.top_score
 
             # C. Generation (Structured)
-            # Convert ranked objects to string context for the LLM
-            context_str = str(ranked_data)
+            context_str = serialize_ranked_context(ranked_data)
 
             answer_object = student.generate(
                 query=query_text,
@@ -107,9 +108,13 @@ if search_btn and query_text:
                 st.error(answer_object)
                 st.stop()
             answer_object = cast(Response, answer_object)
+            answer_object = ground_response(answer_object, ranked_data)
 
             # Map model-generated names back to dataset IDs when possible.
-            if getattr(answer_object, "name_top", None) not in dataset_meta_map:
+            if (
+                answer_object.evidence_status == "supported"
+                and getattr(answer_object, "name_top", None) not in dataset_meta_map
+            ):
                 mapped_top = title_to_dataset_id.get(getattr(answer_object, "name_top", ""))
                 if mapped_top:
                     answer_object.name_top = mapped_top
@@ -122,14 +127,12 @@ if search_btn and query_text:
                     if mapped_name:
                         ds.name = mapped_name
 
-            # --- Display Results ---
-            col_left, col_right = st.columns([2, 2])
+            # Sort supporting datasets strictly in rank order determined by vector retrieval
+            rank_order = {rds.dataset_id: i for i, rds in enumerate(ranked_data)}
+            answer_object.supporting_datasets.sort(key=lambda ds: rank_order.get(ds.name, 999))
 
-            with col_left:
-                render_answer_section(answer_object, dataset_meta_map)
-
-            with col_right:
-                render_supporting_evidence(answer_object, dataset_meta_map)
+            # Use the same output structure as the CLI.
+            st.markdown(format_markdown_response(query_text, answer_object, dataset_meta_map))
 
         except Exception as e:
             st.error(f"An error occurred: {e}")

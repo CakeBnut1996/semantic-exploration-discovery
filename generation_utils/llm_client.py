@@ -84,8 +84,11 @@ class LLMClient:
         try:
             # --- GEMINI ---
             if self.provider == "gemini":
+                full_prompt = f"{system_instruction}\n\n{prompt}" if system_instruction else prompt
                 return self.client.models.generate_content(
-                    model=self.model_name, contents=prompt
+                    model=self.model_name,
+                    contents=full_prompt,
+                    config={"temperature": 0.0}
                 ).text
 
             # --- OPENAI ---
@@ -94,14 +97,17 @@ class LLMClient:
                 if system_instruction:
                     messages.insert(0, {"role": "system", "content": system_instruction})
                 res = self.client.chat.completions.create(
-                    model=self.model_name, messages=messages
+                    model=self.model_name, messages=messages, temperature=0.0, seed=42
                 )
                 return res.choices[0].message.content
 
             # --- ANTHROPIC ---
             elif self.provider == "anthropic":
+                messages = [{"role": "user", "content": prompt}]
+                if system_instruction:
+                    prompt = f"{system_instruction}\n\n{prompt}"
                 res = self.client.messages.create(
-                    model=self.model_name, max_tokens=1024,
+                    model=self.model_name, max_tokens=1024, temperature=0.0,
                     messages=[{"role": "user", "content": prompt}]
                 )
                 return res.content[0].text
@@ -112,55 +118,60 @@ class LLMClient:
                 if system_instruction:
                     messages.insert(0, {"role": "system", "content": system_instruction})
                 res = self.client.chat.completions.create(
-                    model=self.model_name, messages=messages
+                    model=self.model_name, messages=messages, temperature=0.0, seed=42
                 )
                 return res.choices[0].message.content
 
         except Exception as e:
             return f"Error: {e}"
 
-    def generate_structured(self, prompt: str, schema_model: Type[BaseModel]) -> Any:
+    def generate_structured(self, prompt: str, schema_model: Type[BaseModel], system_instruction: str = None) -> Any:
         """Structured output """
         try:
             # --- GEMINI STRUCTURED ---
             if self.provider == "gemini":
+                full_prompt = f"{system_instruction}\n\n{prompt}" if system_instruction else prompt
                 response = self.client.models.generate_content(
                     model=self.model_name,
-                    contents=prompt,
+                    contents=full_prompt,
                     config={
                         "response_mime_type": "application/json",
-                        "response_schema": schema_model
+                        "response_schema": schema_model,
+                        "temperature": 0.0
                     }
                 )
                 return schema_model.model_validate_json(response.text)
 
             # --- OPENAI STRUCTURED ---
             elif self.provider == "openai":
+                messages = [{"role": "user", "content": prompt}]
+                if system_instruction:
+                    messages.insert(0, {"role": "system", "content": system_instruction})
                 completion = self.client.beta.chat.completions.parse(
                     model=self.model_name,
-                    messages=[{"role": "user", "content": prompt}],
-                    response_format=schema_model
+                    messages=messages,
+                    response_format=schema_model,
+                    temperature=0.0,
+                    seed=42
                 )
                 return completion.choices[0].message.parsed
-
 
             elif self.provider == "groq":
                 # https://console.groq.com/docs/structured-outputs
                 schema_json = schema_model.model_json_schema()
+                sys_msg = (
+                    f"{system_instruction}\n\n" if system_instruction else ""
+                ) + f"You are a helpful assistant that outputs JSON matching this JSON schema:\n{json.dumps(schema_json)}"
                 messages = [
-                    {
-                        "role": "system",
-                        "content": (
-                            "You are a helpful assistant that outputs JSON matching this JSON schema:\n"
-                            f"{json.dumps(schema_json)}"
-                        ),
-                    },
+                    {"role": "system", "content": sys_msg},
                     {"role": "user", "content": prompt}
                 ]
                 try:
                     response = self.client.chat.completions.create(
                         model=self.model_name,
                         messages=messages,
+                        temperature=0.0,
+                        seed=42,
                         response_format={
                             "type": "json_schema",
                             "json_schema": {
@@ -175,6 +186,8 @@ class LLMClient:
                         response = self.client.chat.completions.create(
                             model=self.model_name,
                             messages=messages,
+                            temperature=0.0,
+                            seed=42,
                             response_format={"type": "json_object"}
                         )
                     else:
@@ -193,5 +206,4 @@ class LLMClient:
 
         except Exception as e:
             print(f"⚠️ Structured Generation Error: {e}")
-            # Return empty model on failure to prevent crash
-            return schema_model.model_construct()
+            raise RuntimeError(f"Structured generation failed: {e}") from e

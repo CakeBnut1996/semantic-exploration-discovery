@@ -1,5 +1,6 @@
 # display/ui_components.py
 import html
+from urllib.parse import urlparse
 import streamlit as st
 
 
@@ -54,8 +55,10 @@ def render_header():
 
 def _render_source_tag(label_class: str, dataset_name: str, source_url: str | None = None):
     safe_name = html.escape(dataset_name)
-    safe_url = html.escape(source_url) if source_url else ""
-    if source_url and source_url != "Unknown Source":
+    parsed_url = urlparse(source_url.strip()) if source_url else None
+    valid_url = bool(parsed_url and parsed_url.scheme in {"http", "https"} and parsed_url.netloc)
+    safe_url = html.escape(source_url.strip(), quote=True) if valid_url else ""
+    if valid_url:
         st.markdown(
             f'<div class="{label_class}">📂 <a href="{safe_url}" target="_blank">{safe_name}</a></div>',
             unsafe_allow_html=True
@@ -93,6 +96,10 @@ def render_answer_section(answer_obj, dataset_meta_map=None):
 
     st.info(answer_obj.answer)
 
+    if getattr(answer_obj, "evidence_status", "supported") == "insufficient":
+        st.caption("No retrieved source directly supports the requested fact or time period.")
+        return
+
     # Render the top source tag
     name_top = getattr(answer_obj, 'name_top', "Unnamed Dataset")
     meta_map = dataset_meta_map or {}
@@ -100,12 +107,15 @@ def render_answer_section(answer_obj, dataset_meta_map=None):
 
     source_title = top_meta.get("source_title") or name_top
     source_url = top_meta.get("source_url")
-    _render_source_tag("kdf-tag-top", f"Top Source: {source_title}", source_url)
+    top_score = top_meta.get("relevance_score")
+    score_badge = f" [Relevance: {top_score:.0%} / {top_score:.2f}]" if top_score is not None else ""
+    _render_source_tag("kdf-tag-top", f"Top Source: {source_title}{score_badge}", source_url)
 
 
 def render_supporting_evidence(answer_obj, dataset_meta_map=None):
     """Renders the right column: List of supporting datasets."""
     st.subheader("Results")
+    st.caption("ℹ️ Relevance scores range from 0.0 to 1.0 (0%–100%), with higher values indicating content more relevant to your search query.")
 
     datasets = getattr(answer_obj, 'supporting_datasets', [])
     meta_map = dataset_meta_map or {}
@@ -119,8 +129,14 @@ def render_supporting_evidence(answer_obj, dataset_meta_map=None):
         source_title = ds_meta.get("source_title") or ds.name
         source_url = ds_meta.get("source_url")
 
+        score = getattr(ds, "relevance_score", None)
+        if score is None and ds.name in meta_map:
+            score = meta_map[ds.name].get("relevance_score")
+
+        score_badge = f" [Relevance: {score:.0%} / {score:.2f}]" if score is not None else ""
+
         # Use HTML for the green tag style.
-        _render_source_tag("kdf-tag", source_title, source_url)
+        _render_source_tag("kdf-tag", f"{source_title}{score_badge}", source_url)
         st.markdown(f"**Summary:** {ds.summary}")
         st.markdown(f"**Source text excerpt:** \n> *{ds.quote}*")
         st.markdown("---")

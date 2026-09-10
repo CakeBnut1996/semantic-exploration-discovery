@@ -16,6 +16,10 @@ SEED is a Retrieval-Augmented Generation (RAG) tool designed to query complex en
 1. **Retrieval**: Documents are split into chunks, converted into vector embeddings, and stored in ChromaDB (`chroma_db/`). For any query, the system retrieves the most semantically relevant passages.
 2. **Generation**: A Large Language Model (LLM) reads the retrieved context and formulates a concise, factual summary.
 
+## Deployment Handoff
+
+See [DEPLOYMENT_HANDOFF.md](./deployment/DEPLOYMENT_HANDOFF.md) for the production workflow, database-integration responsibilities, ingestion scheduling, metadata mapping, secret configuration, and deployment checklist.
+
 ---
 
 ## Getting Started
@@ -29,13 +33,9 @@ pip install uv
 uv sync
 ```
 
-### 2. Configure System Settings
+### 2. Data Ingestion (optional)
 
-Edit `config.yaml` to set your active embedding model, vector database, and LLM provider. Set the required API key for your chosen LLM as an environment variable (e.g., `OPENAI_API_KEY`, `GROQ_API_KEY`, or `GOOGLE_API_KEY`).
-
-### 3. Data Ingestion
-
-To ingest your own HTML files:
+The test data is stored in local Chroma database under folder `chroma_db/`. To ingest your own HTML files:
 
 1. Place HTML files into the `data_raw/` directory (or the directory specified by `data.data_to_db` in `config.yaml`).
 2. Run the ingestion pipeline to extract, chunk, embed, and store document vectors into `chroma_db/`:
@@ -44,19 +44,7 @@ To ingest your own HTML files:
 python -m ingestion_utils.pre_processor
 ```
 
-### 4. Running Search
-
-#### Option A: Interactive Web UI (Streamlit)
-
-```bash
-streamlit run app.py
-```
-
-A browser window will open displaying the search interface:
-
-![Illustration](./images/illustration_annotated.png)
-
-#### Option B: Command-Line Interface (CLI)
+### 3. Running Search
 
 Run `main.py` interactively or pass a query directly as an argument:
 
